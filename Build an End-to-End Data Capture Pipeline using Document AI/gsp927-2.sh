@@ -79,10 +79,10 @@ deploy_function() {
 gcloud functions deploy process-invoices \
   --region=${LOCATION} \
   --entry-point=process_invoice \
-  --runtime=python37 \
+  --runtime=python39 \
   --service-account=${PROJECT_ID}@appspot.gserviceaccount.com \
   --source=cloud-functions/process-invoices \
-  --timeout=400 \
+  --timeout=300 \
   --env-vars-file=cloud-functions/process-invoices/.env.yaml \
   --trigger-resource=gs://${PROJECT_ID}-input-invoices \
   --trigger-event=google.storage.object.finalize
@@ -108,7 +108,7 @@ deploy_function() {
 gcloud functions deploy geocode-addresses \
   --region=${LOCATION} \
   --entry-point=process_address \
-  --runtime=python38 \
+  --runtime=python39 \
   --service-account=${PROJECT_ID}@appspot.gserviceaccount.com \
   --source=cloud-functions/geocode-addresses \
   --timeout=60 \
