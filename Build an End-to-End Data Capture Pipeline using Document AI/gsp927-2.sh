@@ -26,18 +26,19 @@ RESET=`tput sgr0`
 echo "${BG_MAGENTA}${BOLD}Starting Execution${RESET}"
 
 export GEO_CODE_REQUEST_PUBSUB_TOPIC=geocode_request
-export PROCESSOR_NAME=form-parser
+export PROCESSOR_NAME=form-processor
 export PROJECT_ID=$(gcloud config get-value core/project)
 ACCESS_TOKEN=$(gcloud auth application-default print-access-token)
+PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format="value(projectNumber)")
 
 KEY_NAME=$(gcloud alpha services api-keys list --format="value(name)" --filter "displayName=awesome")
 
 export API_KEY=$(gcloud alpha services api-keys get-key-string $KEY_NAME --format="value(keyString)")
 
-  mkdir ./documentai-pipeline-demo
-  gsutil -m cp -r \
-    gs://sureskills-lab-dev/gsp927/documentai-pipeline-demo/* \
-    ~/documentai-pipeline-demo/
+mkdir ./documentai-pipeline-demo
+gcloud storage cp -r \
+  gs://spls/gsp927/documentai-pipeline-demo/* \
+  ~/documentai-pipeline-demo/
 
 curl -X POST \
   -H "Authorization: Bearer $ACCESS_TOKEN" \
@@ -49,38 +50,47 @@ curl -X POST \
   "https://documentai.googleapis.com/v1/projects/$PROJECT_ID/locations/us/processors"
 
 gsutil mb -c standard -l ${LOCATION} -b on \
-    gs://${PROJECT_ID}-input-invoices
+  gs://${PROJECT_ID}-input-invoices
 gsutil mb -c standard -l ${LOCATION} -b on \
-    gs://${PROJECT_ID}-output-invoices
-
+  gs://${PROJECT_ID}-output-invoices
 gsutil mb -c standard -l ${LOCATION} -b on \
-    gs://${PROJECT_ID}-archived-invoices
+  gs://${PROJECT_ID}-archived-invoices
 
 bq --location="US" mk  -d \
-     --description "Form Parser Results" \
-     ${PROJECT_ID}:invoice_parser_results
-
+    --description "Form Parser Results" \
+    ${PROJECT_ID}:invoice_parser_results
 cd ~/documentai-pipeline-demo/scripts/table-schema/
-
 bq mk --table \
-    invoice_parser_results.doc_ai_extracted_entities \
-    doc_ai_extracted_entities.json
-
+  invoice_parser_results.doc_ai_extracted_entities \
+  doc_ai_extracted_entities.json
 bq mk --table \
-    invoice_parser_results.geocode_details \
-    geocode_details.json
-
+  invoice_parser_results.geocode_details \
+  geocode_details.json
+  
 gcloud pubsub topics \
-    create ${GEO_CODE_REQUEST_PUBSUB_TOPIC}
+  create ${GEO_CODE_REQUEST_PUBSUB_TOPIC}
 
-cd ~/documentai-pipeline-demo/scripts
+gcloud storage service-agent --project=$PROJECT_ID
 
+gcloud iam service-accounts create "service-$PROJECT_NUMBER" \
+  --display-name "Cloud Storage Service Account" || true
+
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:service-$PROJECT_NUMBER@gs-project-accounts.iam.gserviceaccount.com" \
+  --role="roles/pubsub.publisher"
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:service-$PROJECT_NUMBER@gs-project-accounts.iam.gserviceaccount.com" \
+  --role="roles/iam.serviceAccountTokenCreator"
+  
+  cd ~/documentai-pipeline-demo/scripts
+  
+  
 deploy_function() {
 gcloud functions deploy process-invoices \
+  --gen2 \
   --region=${LOCATION} \
   --entry-point=process_invoice \
-  --runtime=python37 \
-  --service-account=${PROJECT_ID}@appspot.gserviceaccount.com \
+  --runtime=python39 \
   --source=cloud-functions/process-invoices \
   --timeout=400 \
   --env-vars-file=cloud-functions/process-invoices/.env.yaml \
@@ -102,14 +112,12 @@ done
 
 echo "Running the next code..."
 
-cd ~/documentai-pipeline-demo/scripts
-
-deploy_function() {
+deploy_function() {  
 gcloud functions deploy geocode-addresses \
+  --gen2 \
   --region=${LOCATION} \
   --entry-point=process_address \
-  --runtime=python38 \
-  --service-account=${PROJECT_ID}@appspot.gserviceaccount.com \
+  --runtime=python39 \
   --source=cloud-functions/geocode-addresses \
   --timeout=60 \
   --env-vars-file=cloud-functions/geocode-addresses/.env.yaml \
@@ -139,30 +147,28 @@ PROCESSOR_ID=$(curl -X GET \
 
 export PROCESSOR_ID
 
-cd ~/documentai-pipeline-demo/scripts
-
 gcloud functions deploy process-invoices \
+  --gen2 \
   --region=${LOCATION} \
   --entry-point=process_invoice \
-  --runtime=python37 \
-  --service-account=${PROJECT_ID}@appspot.gserviceaccount.com \
+  --runtime=python39 \
   --source=cloud-functions/process-invoices \
   --timeout=400 \
+  --update-env-vars=PROCESSOR_ID=${PROCESSOR_ID},PARSER_LOCATION=us,GCP_PROJECT=${PROJECT_ID} \
   --trigger-resource=gs://${PROJECT_ID}-input-invoices \
-  --trigger-event=google.storage.object.finalize \
-  --update-env-vars=PROCESSOR_ID=${PROCESSOR_ID},PARSER_LOCATION=us
+  --trigger-event=google.storage.object.finalize
 
 gcloud functions deploy geocode-addresses \
+  --gen2 \
   --region=${LOCATION} \
   --entry-point=process_address \
-  --runtime=python38 \
-  --service-account=${PROJECT_ID}@appspot.gserviceaccount.com \
+  --runtime=python39 \
   --source=cloud-functions/geocode-addresses \
   --timeout=60 \
-  --trigger-topic=${GEO_CODE_REQUEST_PUBSUB_TOPIC} \
-  --update-env-vars=API_key=${API_KEY}
-
-gsutil cp gs://sureskills-lab-dev/gsp927/documentai-pipeline-demo/sample-files/* gs://${PROJECT_ID}-input-invoices/
+  --update-env-vars=API_key=${API_KEY} \
+  --trigger-topic=${GEO_CODE_REQUEST_PUBSUB_TOPIC}
+  
+gsutil cp gs://spls/gsp927/documentai-pipeline-demo/sample-files/* gs://${PROJECT_ID}-input-invoices/
 
 echo "${BG_RED}${BOLD}Congratulations For Completing The Lab !!!${RESET}"
 
